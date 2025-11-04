@@ -1,132 +1,206 @@
+'use client';
 
-'use client'
-import { useEffect, useState } from 'react'
-import { supabase } from '@/lib/supabase'
+import { useEffect, useRef, useState } from 'react';
+import { supabase } from '@/lib/supabaseClient';
 
 type Combo = {
-  id?: string;
-  fornitore: string;
+  id: number;
   nome: string;
-  prezzo_usd: number;
-  tempi?: string;
-  immagine_url?: string;
+  fornitore: string | null;
+  prezzo_usd: number | null;
+  tempi: string | null;
+  immagine_url: string | null;
+  source_url: string | null;
   attivo: boolean;
-  source_url?: string | null;
-}
+  sort_order?: number | null;
+};
 
-function uid(){ return Math.random().toString(36).slice(2) }
+export default function AdminPage() {
+  const [editId, setEditId] = useState<number | null>(null);
+  const [nome, setNome] = useState('');
+  const [prezzo, setPrezzo] = useState<number | ''>('');
+  const [tempi, setTempi] = useState('');
+  const [fornitore, setFornitore] = useState('Cuballama');
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [imageUrlInput, setImageUrlInput] = useState('');
+  const [sourceUrl, setSourceUrl] = useState('');
+  const [attivo, setAttivo] = useState(true);
 
-export default function AdminPage(){
-  const [user, setUser] = useState<any>(null)
-  const [list, setList] = useState<Combo[]>([])
-  const [form, setForm] = useState<Combo>({ fornitore:'Cuballama', nome:'', prezzo_usd:35, tempi:'24-48h', immagine_url:'', attivo:true, source_url:'' })
-  const [file, setFile] = useState<File|null>(null)
+  const [list, setList] = useState<Combo[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [msg, setMsg] = useState('');
+  const fileRef = useRef<HTMLInputElement>(null);
 
-  useEffect(()=>{
-    supabase.auth.getUser().then(({ data }) => setUser(data.user || null))
-    const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => setUser(s?.user || null))
-    return () => { sub.subscription.unsubscribe() }
-  }, [])
+  function toast(t: string) { setMsg(t); setTimeout(() => setMsg(''), 1600); }
 
-  useEffect(()=>{ load() }, [])
+  async function loadList() {
+    setLoading(true);
+    const { data, error } = await supabase
+      .from('combos')
+      .select('id, nome, fornitore, prezzo_usd, tempi, immagine_url, source_url, attivo, sort_order, created_at')
+      .order('created_at', { ascending: false });
+    if (error) console.error(error);
+    setList(data || []);
+    setLoading(false);
+  }
+  useEffect(() => { loadList(); }, []);
 
-  const load = async()=>{
-    const { data } = await supabase.from('combos').select('*').order('created_at',{ascending:false})
-    setList(data as Combo[] || [])
+  function resetForm() {
+    setEditId(null); setNome(''); setPrezzo(''); setTempi('');
+    setFornitore('Cuballama'); setImageFile(null); setImageUrlInput('');
+    setSourceUrl(''); setAttivo(true); if (fileRef.current) fileRef.current.value = '';
   }
 
-  const signIn = async (e:any)=>{
-    e.preventDefault()
-    const email = (e.target.email.value||'').trim()
-    const password = (e.target.password.value||'').trim()
-    if(!email || !password) return alert('Compila email e password')
-    const { error } = await supabase.auth.signInWithPassword({ email, password })
-    if(error) alert(error.message)
-  }
-  const signOut = async()=>{ await supabase.auth.signOut() }
-
-  const uploadImage = async()=>{
-    if(!file) return null
-    const name = `combo-${Date.now()}-${uid()}.jpg`
-    const { error } = await supabase.storage.from('combo-images').upload(name, file, { upsert: false })
-    if(error){ alert(error.message); return null }
-    const { data } = await supabase.storage.from('combo-images').getPublicUrl(name)
-    return data.publicUrl || null
+  function loadForEdit(c: Combo) {
+    setEditId(c.id);
+    setNome(c.nome ?? ''); setPrezzo(c.prezzo_usd ?? '');
+    setTempi(c.tempi ?? ''); setFornitore(c.fornitore ?? 'Cuballama');
+    setImageFile(null); setImageUrlInput(c.immagine_url ?? '');
+    setSourceUrl(c.source_url ?? ''); setAttivo(!!c.attivo);
+    if (fileRef.current) fileRef.current.value = '';
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
-  const save = async()=>{
-    if(!form.nome) return alert('Inserisci un nome')
-    let imgUrl = form.immagine_url || null
-    if(file){
-      const pub = await uploadImage()
-      if(pub) imgUrl = pub
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!nome.trim()) return toast('Inserisci un nome.');
+    const prezzoNum = typeof prezzo === 'string' ? Number(prezzo.replace(',', '.')) : Number(prezzo);
+    if (Number.isNaN(prezzoNum) || prezzoNum < 0) return toast('Prezzo non valido.');
+
+    let finalImageUrl = imageUrlInput.trim() || null;
+    if (imageFile) {
+      const name = `${Date.now()}_${imageFile.name.replace(/\s+/g, '_')}`;
+      const { error: upErr } = await supabase.storage.from('combo-images').upload(name, imageFile, { upsert: true });
+      if (upErr) { console.error(upErr); return toast('Errore upload immagine.'); }
+      const { data: pub } = await supabase.storage.from('combo-images').getPublicUrl(name);
+      finalImageUrl = pub?.publicUrl ?? null;
     }
-    const payload = { ...form, immagine_url: imgUrl }
-    const { error } = await supabase.from('combos').insert(payload as any)
-    if(error) return alert(error.message)
-    setForm({ fornitore:'Cuballama', nome:'', prezzo_usd:35, tempi:'24-48h', immagine_url:'', attivo:true, source_url:'' })
-    setFile(null)
-    ;(document.getElementById('file') as HTMLInputElement).value = ''
-    load()
+
+    const payload = {
+      nome: nome.trim(),
+      prezzo_usd: prezzoNum,
+      tempi: tempi.trim() || null,
+      immagine_url: finalImageUrl,
+      source_url: sourceUrl.trim() || null,
+      fornitore: fornitore.trim() || null,
+      attivo
+    };
+
+    if (editId == null) {
+      const { error } = await supabase.from('combos').insert(payload);
+      if (error) { console.error(error); return toast('Errore salvataggio.'); }
+      toast('Salvato.');
+    } else {
+      const { error } = await supabase.from('combos').update(payload).eq('id', editId);
+      if (error) { console.error(error); return toast('Errore aggiornamento.'); }
+      toast('Aggiornato.');
+    }
+
+    resetForm();
+    await loadList();
   }
 
-  const del = async(id?:string)=>{
-    if(!id) return
-    if(!confirm('Eliminare questo combo?')) return
-    const { error } = await supabase.from('combos').delete().eq('id', id)
-    if(error) return alert(error.message)
-    load()
-  }
-
-  if(!user){
-    return (
-      <div className="card" style={{maxWidth:420, margin:'32px auto'}}>
-        <h2>Login Admin</h2>
-        <form onSubmit={signIn} style={{display:'grid', gap:8}}>
-          <input name="email" type="email" placeholder="Email" />
-          <input name="password" type="password" placeholder="Password" />
-          <button className="btn" type="submit">Entra</button>
-        </form>
-      </div>
-    )
+  async function handleDelete(id: number) {
+    if (!confirm('Eliminare questo combo?')) return;
+    const { error } = await supabase.from('combos').delete().eq('id', id);
+    if (error) { console.error(error); return toast('Errore eliminazione.'); }
+    toast('Eliminato.');
+    await loadList();
   }
 
   return (
-    <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:16, marginTop:16}}>
-      <div className="card">
-        <div style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
-          <h2>Nuovo combo</h2>
-          <button className="btn" onClick={signOut}>Esci</button>
-        </div>
-        <div style={{display:'grid', gap:8}}>
-          <input placeholder="Nome" value={form.nome} onChange={e=>setForm({...form, nome:e.target.value})}/>
-          <input placeholder="Fornitore" value={form.fornitore} onChange={e=>setForm({...form, fornitore:e.target.value})}/>
-          <input placeholder="Prezzo USD" type="number" value={form.prezzo_usd} onChange={e=>setForm({...form, prezzo_usd:parseFloat(e.target.value)})}/>
-          <input placeholder="Tempi (es. 24-48h)" value={form.tempi} onChange={e=>setForm({...form, tempi:e.target.value})}/>
-          <input id="file" type="file" accept="image/*" onChange={e=>setFile(e.target.files?.[0]||null)} />
-          <input placeholder="Oppure incolla URL immagine" value={form.immagine_url||''} onChange={e=>setForm({...form, immagine_url:e.target.value})}/>
-          <input placeholder="Link all'offerta (source_url)" value={form.source_url||''} onChange={e=>setForm({...form, source_url:e.target.value})}/>
-          <label className="small"><input type="checkbox" checked={form.attivo} onChange={e=>setForm({...form, attivo:e.target.checked})}/> Attivo</label>
-          <button className="btn" onClick={save}>Salva</button>
-        </div>
-      </div>
+    <main className="max-w-6xl mx-auto px-4 py-8">
+      {msg && <div className="fixed bottom-4 right-4 bg-emerald-600 text-white px-4 py-2 rounded-xl shadow">{msg}</div>}
 
-      <div className="card">
-        <h2>Elenco</h2>
-        <div className="grid">
-          {list.map(c=>(
-            <div key={c.id} className="card">
-              {c.immagine_url ? <img src={c.immagine_url} alt={c.nome}/> : null}
-              <strong>{c.nome}</strong>
-              <div className="small">{c.fornitore}</div>
-              <div><b>${c.prezzo_usd}</b> • <span className="small">Tempi: {c.tempi || '—'}</span></div>
-              {c.source_url ? <a href={c.source_url} target="_blank" className="small">Vai all'offerta</a> : null}
-              <div className="small">Attivo: {c.attivo ? 'SI' : 'NO'}</div>
-              <button className="btn" onClick={()=>del(c.id)}>Elimina</button>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        {/* FORM */}
+        <div className="rounded-2xl bg-white ring-1 ring-black/5 p-5">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xl font-semibold">{editId == null ? 'Nuovo combo' : 'Modifica combo'}</h2>
+            {editId != null && (
+              <button onClick={resetForm} className="px-3 py-1.5 rounded-xl bg-neutral-200 hover:bg-neutral-300">Esci</button>
+            )}
+          </div>
+
+          <form onSubmit={handleSubmit} className="flex flex-col gap-3">
+            <label className="text-sm">Nome
+              <input className="mt-1 w-full px-3 py-2 rounded-xl bg-white border border-neutral-300"
+                     value={nome} onChange={e => setNome(e.target.value)} required />
+            </label>
+
+            <label className="text-sm">Prezzo (USD)
+              <input className="mt-1 w-full px-3 py-2 rounded-xl bg-white border border-neutral-300"
+                     value={prezzo} onChange={e => setPrezzo(e.target.value)} inputMode="decimal" required />
+            </label>
+
+            <label className="text-sm">Tempi consegna
+              <input className="mt-1 w-full px-3 py-2 rounded-xl bg-white border border-neutral-300"
+                     value={tempi} onChange={e => setTempi(e.target.value)} placeholder="Es. 24-48h" />
+            </label>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <label className="text-sm">Carica immagine
+                <input ref={fileRef} type="file" accept="image/*" className="mt-1 block w-full text-sm"
+                       onChange={e => setImageFile(e.target.files?.[0] ?? null)} />
+              </label>
+              <label className="text-sm">Oppure incolla URL immagine
+                <input className="mt-1 w-full px-3 py-2 rounded-xl bg-white border border-neutral-300"
+                       value={imageUrlInput} onChange={e => setImageUrlInput(e.target.value)} placeholder="https://…" />
+              </label>
             </div>
-          ))}
+
+            <label className="text-sm">Link all’offerta (source_url)
+              <input className="mt-1 w-full px-3 py-2 rounded-xl bg-white border border-neutral-300"
+                     value={sourceUrl} onChange={e => setSourceUrl(e.target.value)} placeholder="https://…" />
+            </label>
+
+            <label className="text-sm">Fornitore
+              <input className="mt-1 w-full px-3 py-2 rounded-xl bg-white border border-neutral-300"
+                     value={fornitore} onChange={e => setFornitore(e.target.value)} placeholder="Cuballama" />
+            </label>
+
+            <label className="flex items-center gap-2 mt-1">
+              <input type="checkbox" checked={attivo} onChange={e => setAttivo(e.target.checked)} /> Attivo
+            </label>
+
+            <button type="submit" className="mt-2 w-full px-4 py-2 rounded-xl bg-rose-600 text-white hover:opacity-90">
+              {editId == null ? 'Salva' : 'Aggiorna'}
+            </button>
+          </form>
+        </div>
+
+        {/* LISTA */}
+        <div className="rounded-2xl bg-white ring-1 ring-black/5 p-5">
+          <h2 className="text-xl font-semibold mb-4">Elenco</h2>
+          {loading ? (
+            <div className="text-neutral-500">Caricamento…</div>
+          ) : list.length === 0 ? (
+            <div className="text-neutral-500">Nessun combo inserito.</div>
+          ) : (
+            <div className="grid gap-5 sm:grid-cols-2">
+              {list.map(c => (
+                <div key={c.id} className="rounded-xl ring-1 ring-black/5 p-3 bg-white">
+                  {c.immagine_url && (
+                    <img src={c.immagine_url} alt={c.nome} className="w-full h-40 object-cover rounded-lg mb-2" />
+                  )}
+                  <div className="font-semibold">{c.nome}</div>
+                  <div className="text-sm text-neutral-600">{c.fornitore ?? '—'}</div>
+                  <div className="text-[15px] font-bold mt-1">
+                    {c.prezzo_usd != null ? `$${c.prezzo_usd.toFixed(2)}` : '—'}
+                  </div>
+                  <div className="text-sm text-neutral-600">
+                    {c.tempi ? `Tempi: ${c.tempi}` : '—'} • Attivo: {c.attivo ? 'Sì' : 'No'}
+                  </div>
+                  <div className="mt-3 flex gap-2">
+                    <button onClick={() => loadForEdit(c)} className="px-3 py-1.5 rounded-lg bg-amber-600 text-white hover:opacity-90">Modifica</button>
+                    <button onClick={() => handleDelete(c.id)} className="px-3 py-1.5 rounded-lg bg-rose-600 text-white hover:opacity-90">Elimina</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
-    </div>
-  )
+    </main>
+  );
 }
