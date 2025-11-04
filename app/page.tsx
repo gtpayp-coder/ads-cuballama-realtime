@@ -1,4 +1,5 @@
-import ComboGrid from '@/components/ComboGrid';
+import dynamic from 'next/dynamic';
+const ComboGrid = dynamic(() => import('@/components/ComboGrid'), { ssr: false });
 
 export default function Page() {
   return (
