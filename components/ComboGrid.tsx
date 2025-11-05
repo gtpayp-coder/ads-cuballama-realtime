@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
-import ComboCard from './ComboCard';
+import ComboCard from '@/components/ComboCard';
 
 type Combo = {
   id: number;
@@ -88,3 +88,4 @@ export default function ComboGrid() {
     </div>
   );
 }
+
